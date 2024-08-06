@@ -1,6 +1,8 @@
-package engine
+package in_memory
 
-import "sync"
+import (
+	"sync"
+)
 
 var HashTableBuilder = func() hashTable { return NewHashTable() }
 

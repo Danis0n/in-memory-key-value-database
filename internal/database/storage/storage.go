@@ -6,7 +6,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type engine interface {
+type Engine interface {
 	Set(ctx context.Context, key, value string)
 	Get(ctx context.Context, key string) (string, bool)
 	Del(ctx context.Context, key string)
@@ -14,12 +14,12 @@ type engine interface {
 
 type Storage struct {
 	logger *zap.Logger
-	engine engine
+	engine Engine
 }
 
-func NewStorage(logger *zap.Logger, engine engine) (*Storage, error) {
+func NewStorage(logger *zap.Logger, engine Engine) (*Storage, error) {
 	if engine == nil {
-		return nil, errors.New("engine invalid")
+		return nil, errors.New("Engine invalid")
 	}
 
 	if logger == nil {

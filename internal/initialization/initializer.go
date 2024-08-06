@@ -2,33 +2,84 @@ package initialization
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"go.uber.org/zap"
+	"in-memory-key-value-database/internal/configuration"
 	"in-memory-key-value-database/internal/database"
 	"in-memory-key-value-database/internal/database/compute"
 	"in-memory-key-value-database/internal/database/storage"
-	"in-memory-key-value-database/internal/database/storage/engine"
-	"in-memory-key-value-database/internal/run"
+	"in-memory-key-value-database/internal/network"
 )
 
-type runner interface {
-	HandleQueries(ctx context.Context) error
+type Runner interface {
+	Start(ctx context.Context, handler network.Handler) error
 }
 
 type Initializer struct {
-	engine engine.Engine
-	logger *zap.Logger
+	dbEngine storage.Engine
+	logger   *zap.Logger
+	runner   Runner
 }
 
-func createEngine(logger *zap.Logger) (*engine.Engine, error) {
-	return engine.NewEngine(engine.HashTableBuilder, logger, 10)
+func NewInitializer(cfg *configuration.Configuration) (*Initializer, error) {
+	if cfg == nil {
+		return nil, errors.New("configuration invalid")
+	}
+
+	logger, err := CreateLogger(cfg.LoggingConfiguration)
+	if err != nil {
+		return nil, err
+	}
+
+	dbEngine, err := CreateEngine(cfg.EngineConfiguration, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	runner, err := CreateRunner(logger, cfg.RunnerConfiguration, cfg.NetworkConfiguration)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Initializer{
+		dbEngine: dbEngine,
+		logger:   logger,
+		runner:   runner,
+	}, nil
 }
 
-func (i *Initializer) createStorageLayer(logger *zap.Logger) (*storage.Storage, error) {
-	return storage.NewStorage(logger, &i.engine)
+func (i *Initializer) StartDatabase(ctx context.Context) error {
+	storageLayer, err := createStorageLayer(i.logger, i.dbEngine)
+	if err != nil {
+		return err
+	}
+
+	computeLayer, err := createComputeLayer(i.logger)
+	if err != nil {
+		return err
+	}
+
+	db, err := database.NewDatabase(i.logger, storageLayer, computeLayer)
+	if err != nil {
+		return err
+	}
+
+	err = i.runner.Start(ctx, func(ctx context.Context, queryStr []byte) []byte {
+		response := db.HandleQuery(ctx, string(queryStr))
+		return []byte(response)
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (i *Initializer) createComputeLayer(logger *zap.Logger) (*compute.Compute, error) {
+func createStorageLayer(logger *zap.Logger, dbEngine storage.Engine) (*storage.Storage, error) {
+	return storage.NewStorage(logger, dbEngine)
+}
+
+func createComputeLayer(logger *zap.Logger) (*compute.Compute, error) {
 	parser, err := compute.NewParser(logger)
 	if err != nil {
 		return nil, err
@@ -40,57 +91,4 @@ func (i *Initializer) createComputeLayer(logger *zap.Logger) (*compute.Compute, 
 	}
 
 	return compute.NewCompute(analyzer, parser, logger)
-}
-
-// here may be some manipulation with configuration
-func (i *Initializer) createRunner(databaseLayer database.Database) (runner, error) {
-	return run.NewConsoleRunner(databaseLayer)
-}
-
-func NewInitializer() (*Initializer, error) {
-
-	logger, err := zap.NewDevelopment()
-	if err != nil {
-		return nil, err
-	}
-
-	en, err := createEngine(logger)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Initializer{
-		engine: *en,
-		logger: logger,
-	}, nil
-}
-
-func (i *Initializer) StartDatabase(ctx context.Context) error {
-	storageLayer, err := i.createStorageLayer(i.logger)
-	if err != nil {
-		return err
-	}
-
-	computeLayer, err := i.createComputeLayer(i.logger)
-	if err != nil {
-		return err
-	}
-
-	databaseLayer, err := database.NewDatabase(i.logger, storageLayer, computeLayer)
-	if err != nil {
-		return err
-	}
-
-	runner, consErr := i.createRunner(*databaseLayer)
-
-	if consErr != nil {
-		return consErr
-	}
-
-	for {
-		err := runner.HandleQueries(ctx)
-		if err != nil {
-			fmt.Print(err)
-		}
-	}
 }
